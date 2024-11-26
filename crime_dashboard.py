@@ -11,11 +11,11 @@ import numpy as np
 @st.cache_resource
 def load_datasets():
     # Load crime data
-    crime_data = pd.read_csv("/subway-surfers/data/CLEANED_NYPD_Arrest_Data_YTD")
+    crime_data = pd.read_csv("data/CLEANED_NYPD_Arrest_Data_YTD")
     crime_data['ARREST_DATE'] = pd.to_datetime(crime_data['ARREST_DATE'])
     
     # Load subway stations data
-    subway_stations = pd.read_csv("/subway-surfers/data/SubwayEntranceData.csv")
+    subway_stations = pd.read_csv("data/SubwayEntranceData.csv")
     
     return crime_data, subway_stations
 
