@@ -8,7 +8,7 @@ import plotly.graph_objects as go
 import numpy as np
 
 # Load the data
-@st.cache_resource
+@st.cache_data
 def load_datasets():
     # Load crime data
     crime_data = pd.read_csv("data/CLEANED_NYPD_Arrest_Data_YTD")
@@ -18,6 +18,29 @@ def load_datasets():
     subway_stations = pd.read_csv("data/SubwayEntranceData.csv")
     
     return crime_data, subway_stations
+
+@st.cache_data
+def load_data_by_date_range(start_date, end_date):
+    """
+    Load data within a specified date range
+    
+    Args:
+    - start_date: Start of the date range
+    - end_date: End of the date range
+    
+    Returns:
+    - Filtered DataFrame 
+    """
+    # Load full dataset
+    crime_data, subway_stations = load_datasets()
+    
+    # Filter data for the specified date range
+    filtered_data = crime_data[
+        (crime_data['ARREST_DATE'] >= start_date) & 
+        (crime_data['ARREST_DATE'] <= end_date)
+    ]
+    
+    return filtered_data, subway_stations
 
 def calculate_nearby_crime(crime_data, station_lat, station_lon, radius_km=0.5):
     """
@@ -86,13 +109,13 @@ def create_station_specific_map(nearby_crimes, station_lat, station_lon):
     
     return station_map
 
-def create_crime_visualization(nearby_crimes, viz_type='monthly', start_date=None, end_date=None):
+def create_crime_visualization(nearby_crimes, viz_type='weekly', start_date=None, end_date=None):
     """
-    Create either monthly or daily crime trend visualization
+    Create either weekly or daily crime trend visualization
     
     Args:
     - nearby_crimes: DataFrame of nearby crimes
-    - viz_type: 'monthly' or 'daily'
+    - viz_type: 'weekly' or 'daily'
     
     Returns:
     - Plotly figure of crime trend
@@ -105,19 +128,23 @@ def create_crime_visualization(nearby_crimes, viz_type='monthly', start_date=Non
     if start_date and end_date:
         nearby_crimes = nearby_crimes[(nearby_crimes['ARREST_DATE'] >= start_date) & (nearby_crimes['ARREST_DATE'] <= end_date)]
     
-    if viz_type == 'monthly':
-        # Monthly trend
-        # Monthly trend using pd.Grouper to group by month start
-        monthly_trend = nearby_crimes.groupby(pd.Grouper(key='ARREST_DATE', freq='ME')).size()
+    if viz_type == 'weekly':
+        # Weekly trend using pd.Grouper to group by week start
+        weekly_trend = nearby_crimes.groupby(pd.Grouper(key='ARREST_DATE', freq='W-MON')).size()
         
         fig = px.line(
-            x=monthly_trend.index, 
-            y=monthly_trend.values, 
-            title="Monthly Crime Trend",
-            labels={'x': 'Month', 'y': 'Number of Crimes'}
+            x=weekly_trend.index, 
+            y=weekly_trend.values, 
+            title="Weekly Crime Trend",
+            labels={'x': 'Week', 'y': 'Number of Crimes'}
+        )
+        
+        # Customize hover template to show week range
+        fig.update_traces(
+            hovertemplate='Week Starting: %{x}<br>Crimes: %{y}<extra></extra>'
         )
     else:
-        # Daily trend
+        # Daily trend (keeping the existing daily implementation)
         daily_trend = nearby_crimes.resample('D', on='ARREST_DATE').size()
         fig = px.line(
             x=daily_trend.index, 
@@ -214,10 +241,10 @@ def create_trend_analysis(filtered_data):
                             name='Daily Arrests',
                             mode='lines',
                             line=dict(color='lightgray')))
-    fig.add_trace(go.Scatter(x=daily_arrests['ARREST_DATE'], 
-                            y=daily_arrests['rolling_avg'],
-                            name='7-day Moving Average',
-                            line=dict(color='red')))
+    # fig.add_trace(go.Scatter(x=daily_arrests['ARREST_DATE'], 
+    #                         y=daily_arrests['rolling_avg'],
+    #                         name='7-day Moving Average',
+    #                         line=dict(color='red')))
     
     fig.update_layout(title='Arrest Trends Over Time',
                      xaxis_title='Date',
@@ -228,108 +255,36 @@ def main():
     st.title("NYC Crime Data Dashboard")
     
     # Load datasets
-    data, subway_stations = load_datasets()
+    full_data, subway_stations = load_datasets()
+
+    # Determine default date range
+    latest_date = full_data['ARREST_DATE'].max()
+    default_start_date = latest_date - pd.Timedelta(days=7)
     
     # Tabs for different views
-    tab1, tab2 = st.tabs(["City-Wide Crime Analysis", "Subway Station Crime Analysis"])
+    tab1, tab2 = st.tabs(["Subway Station Crime Analysis", "City-Wide Crime Analysis"])
+
+     # Date range selector with smart defaults
+    st.sidebar.header("Data Range Selection")
+    date_range = st.sidebar.slider(
+        "Select Date Range",
+        min_value=full_data['ARREST_DATE'].min().date(),
+        max_value=latest_date.date(),
+        value=(default_start_date.date(), latest_date.date())
+    )
+
+     # Load data for selected date range
+    data, _ = load_data_by_date_range(
+        pd.to_datetime(date_range[0]), 
+        pd.to_datetime(date_range[1])
+    )
+
+    # Extract the selected start and end dates from the date_range tuple
+    start_date, end_date = date_range
+
+    st.sidebar.caption("Be aware: Loading the full historical data will take some time!")
     
     with tab1:
-        st.sidebar.header("City-Wide Filters")
-        
-        # Sidebar Filters
-        boro_options = data['ARREST_BORO'].unique()
-        selected_boro = st.sidebar.multiselect("Select Borough(s):", boro_options, default=boro_options)
-        selected_offense = st.sidebar.multiselect("Select Offense(s):", data['OFNS_DESC'].unique())
-        
-        # Date range selector
-        min_date = data['ARREST_DATE'].min()
-        max_date = data['ARREST_DATE'].max()
-        date_range = st.sidebar.date_input(
-            "Select Date Range",
-            value=(min_date, max_date),
-            min_value=min_date,
-            max_value=max_date
-        )
-
-        # Extract the selected start and end dates from the date_range tuple
-        start_date, end_date = date_range
-        
-        # Filter the data
-        filtered_data = data[data['ARREST_BORO'].isin(selected_boro)]
-        if selected_offense:
-            filtered_data = filtered_data[filtered_data['OFNS_DESC'].isin(selected_offense)]
-        if len(date_range) == 2:
-            filtered_data = filtered_data[
-                (filtered_data['ARREST_DATE'].dt.date >= date_range[0]) &
-                (filtered_data['ARREST_DATE'].dt.date <= date_range[1])
-            ]
-        
-        # Existing visualizations
-        st.subheader("Crime Map")
-        if not filtered_data.empty:
-            map_fig = px.scatter_mapbox(
-                filtered_data,
-                lat="Latitude",
-                lon="Longitude",
-                color="OFNS_DESC",
-                hover_data=["ARREST_BORO", "ARREST_DATE"],
-                zoom=10,
-                mapbox_style="carto-positron"
-            )
-            st.plotly_chart(map_fig)
-        
-        # Heat Map
-        st.subheader("Crime Heat Map")
-        if not filtered_data.empty:
-            heat_map = folium.Map(location=[40.7128, -74.0060], zoom_start=11)
-            heat_data = filtered_data[['Latitude', 'Longitude']].dropna().values.tolist()
-            HeatMap(
-                heat_data,
-                radius=15,
-                blur=20,
-                max_zoom=12,
-                gradient={0.2: 'white', 1: 'red'}
-            ).add_to(heat_map)
-            st_folium(heat_map, width=700, height=500)
-        
-        # Additional visualizations from previous dashboard
-        if not filtered_data.empty:
-            # Crime by Borough
-            st.subheader("Top Crimes by Borough")
-            borough_fig = create_crime_by_borough_chart(filtered_data)
-            st.plotly_chart(borough_fig)
-            
-            # Weekly Pattern
-            st.subheader("Weekly Crime Pattern")
-            weekly_fig = create_weekly_pattern_chart(filtered_data)
-            st.plotly_chart(weekly_fig)
-            
-            # Trend Analysis
-            st.subheader("Crime Trends")
-            trend_fig = create_trend_analysis(filtered_data)
-            st.plotly_chart(trend_fig)
-
-            # Key Statistics
-            st.subheader("Key Statistics")
-            col1, col2, col3 = st.columns(3)
-        
-            with col1:
-                total_arrests = len(filtered_data)
-                st.metric("Total Arrests", f"{total_arrests:,}")
-            
-            with col2:
-                peak_date = (filtered_data.groupby('ARREST_DATE')
-                        .size()
-                        .idxmax())
-                st.metric("Peak Arrest Date", peak_date.strftime('%Y-%m-%d'))
-            
-            with col3:
-                most_common_crime = (filtered_data['OFNS_DESC']
-                               .value_counts()
-                               .index[0])
-            st.metric("Most Common Offense", most_common_crime)
-    
-    with tab2:
         st.sidebar.header("Subway Station Analysis")
         
         # Station Selection
@@ -373,7 +328,7 @@ def main():
             
             # Trend Visualization
             st.subheader("Crime Trends Near Station")
-            trend_type = st.radio("Select Trend Type:", ["Monthly", "Daily"])
+            trend_type = st.radio("Select Trend Type:", ["Weekly", "Daily"])
             trend_fig = create_crime_visualization(nearby_crimes, viz_type=trend_type.lower(), start_date=start_date, end_date=end_date)
             st.plotly_chart(trend_fig)
         else:
@@ -391,6 +346,90 @@ def main():
                 title="Top 5 Crime Types Near Station"
             )
             st.plotly_chart(fig_pie)
+    
+    with tab2:
+        st.sidebar.header("City-Wide Filters")
+        
+        # Sidebar Filters
+        boro_options = data['ARREST_BORO'].unique()
+        selected_boro = st.sidebar.multiselect("Select Borough(s):", boro_options, default=boro_options)
+        selected_offense = st.sidebar.multiselect("Select Offense(s):", data['OFNS_DESC'].unique())
+        
+        # Filter the data
+        filtered_data = data[data['ARREST_BORO'].isin(selected_boro)]
+        if selected_offense:
+            filtered_data = filtered_data[filtered_data['OFNS_DESC'].isin(selected_offense)]
+        if len(date_range) == 2:
+            filtered_data = filtered_data[
+                (filtered_data['ARREST_DATE'].dt.date >= date_range[0]) &
+                (filtered_data['ARREST_DATE'].dt.date <= date_range[1])
+            ]
+        
+        # Existing visualizations
+        st.subheader("Crime Map")
+        if not filtered_data.empty:
+            map_fig = px.scatter_mapbox(
+                filtered_data,
+                lat="Latitude",
+                lon="Longitude",
+                color="OFNS_DESC",
+                opacity= 0.5,
+                hover_data=["ARREST_BORO", "ARREST_DATE"],
+                zoom=10,
+                mapbox_style="carto-positron"
+            )
+            st.plotly_chart(map_fig)
+        
+        # Heat Map
+        # st.subheader("Crime Heat Map")
+        # if not filtered_data.empty:
+        #     heat_map = folium.Map(location=[40.7128, -74.0060], zoom_start=11)
+        #     heat_data = filtered_data[['Latitude', 'Longitude']].dropna().values.tolist()
+        #     HeatMap(
+        #         heat_data,
+        #         radius=15,
+        #         blur=20,
+        #         max_zoom=12,
+        #         gradient={0.2: 'white', 1: 'red'}
+        #     ).add_to(heat_map)
+        #     st_folium(heat_map, width=700, height=500)
+        
+        # Additional visualizations from previous dashboard
+        if not filtered_data.empty:
+            # Crime by Borough
+            st.subheader("Top Crimes by Borough")
+            borough_fig = create_crime_by_borough_chart(filtered_data)
+            st.plotly_chart(borough_fig)
+            
+            # Weekly Pattern
+            st.subheader("Weekly Crime Pattern")
+            weekly_fig = create_weekly_pattern_chart(filtered_data)
+            st.plotly_chart(weekly_fig)
+            
+            # Trend Analysis
+            st.subheader("Crime Trends")
+            trend_fig = create_trend_analysis(filtered_data)
+            st.plotly_chart(trend_fig)
+
+            # Key Statistics
+            st.subheader("Key Statistics")
+            col1, col2, col3 = st.columns(3)
+        
+            with col1:
+                total_arrests = len(filtered_data)
+                st.metric("Total Arrests", f"{total_arrests:,}")
+            
+            with col2:
+                peak_date = (filtered_data.groupby('ARREST_DATE')
+                        .size()
+                        .idxmax())
+                st.metric("Peak Arrest Date", peak_date.strftime('%Y-%m-%d'))
+            
+            with col3:
+                most_common_crime = (filtered_data['OFNS_DESC']
+                               .value_counts()
+                               .index[0])
+            st.metric("Most Common Offense", most_common_crime)
 
 if __name__ == "__main__":
     main()
